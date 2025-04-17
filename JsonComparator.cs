@@ -4,37 +4,37 @@ namespace MapJsonComparator;
 
 public static class JsonComparator
 {
-    public static void CompareJsonTokens(JToken a, JToken b, string path, List<string> diffs)
+    public static void CompareJsonTokens(JToken oldToken, JToken newToken, string path, List<string> diffs)
     {
-        if (a.Type != b.Type)
+        if (oldToken.Type != newToken.Type)
         {
-            diffs.Add($"Different types: {path}: ({a.Type}, {b.Type})"); // should not happen
+            diffs.Add($"Different types: {path}: ({oldToken.Type}, {newToken.Type})"); // should not happen
             return;
         }
 
-        switch (a.Type)
+        switch (oldToken.Type)
         {
             case JTokenType.Object:
-                CompareJsonObjects((JObject)a, (JObject)b, path, diffs);
+                CompareJsonObjects((JObject)oldToken, (JObject)newToken, path, diffs);
                 break;
 
             case JTokenType.Array:
-                CompareJsonArrays((JArray)a, (JArray)b, path, diffs);
+                CompareJsonArrays((JArray)oldToken, (JArray)newToken, path, diffs);
                 break;
 
             default:
-                CompareJsonValues((JValue)a, (JValue)b, path, diffs);
+                CompareJsonValues((JValue)oldToken, (JValue)newToken, path, diffs);
                 break;
         }
     }
 
-    private static void CompareJsonArrays(JArray arrA, JArray arrB, string path, List<string> diffs)
+    private static void CompareJsonArrays(JArray oldArray, JArray newArray, string path, List<string> diffs)
     {
         // use "id" if possible
-        bool hasIdA = arrA.All(t => t.Type == JTokenType.Object && ((JObject)t).Property("id")?.Value.Type == JTokenType.String);
-        bool hasIdB = arrB.All(t => t.Type == JTokenType.Object && ((JObject)t).Property("id")?.Value.Type == JTokenType.String);
+        bool hasIdOld = oldArray.All(token => token.Type == JTokenType.Object && ((JObject)token).Property("id")?.Value.Type == JTokenType.String);
+        bool hasIdNew = newArray.All(token => token.Type == JTokenType.Object && ((JObject)token).Property("id")?.Value.Type == JTokenType.String);
 
-        if (hasIdA && hasIdB)
+        if (hasIdOld && hasIdNew)
         {
             Func<JObject, string> getKey = static o =>
             {
@@ -47,58 +47,71 @@ public static class JsonComparator
                     return o.Value<string>("id");
                 }
             };
-            var dictA = arrA.Cast<JObject>().ToDictionary(getKey);
-            var dictB = arrB.Cast<JObject>().ToDictionary(getKey);
-            var allIds = new HashSet<string>(dictA.Keys);
-            allIds.UnionWith(dictB.Keys);
+            var oldDict = oldArray.Cast<JObject>().ToDictionary(getKey);
+            var newDict = newArray.Cast<JObject>().ToDictionary(getKey);
+            var allIds = new HashSet<string>(oldDict.Keys);
+            allIds.UnionWith(newDict.Keys);
 
             foreach (var id in allIds)
             {
                 var childPath = $"{path}[id={id}]";
-                if (!dictA.ContainsKey(id))
+
+                if (!oldDict.ContainsKey(id))
                     diffs.Add($"added: {childPath}");
-                else if (!dictB.ContainsKey(id))
+                else if (!newDict.ContainsKey(id))
                     diffs.Add($"removed: {childPath}");
                 else
-                    CompareJsonObjects(dictA[id], dictB[id], childPath, diffs);
+                    CompareJsonObjects(oldDict[id], newDict[id], childPath, diffs);
             }
         }
         else
         {
             // Fallback: if id not exists, compare by index
-            int max = Math.Max(arrA.Count, arrB.Count);
+            int max = Math.Max(oldArray.Count, newArray.Count);
             for (int i = 0; i < max; i++)
             {
                 var childPath = $"{path}[{i}]";
-                if (i >= arrA.Count)
+                if (i >= oldArray.Count)
                     diffs.Add($"added: {childPath}");
-                else if (i >= arrB.Count)
+                else if (i >= newArray.Count)
                     diffs.Add($"removed: {childPath}");
                 else
-                    CompareJsonTokens(arrA[i], arrB[i], childPath, diffs);
+                    CompareJsonTokens(oldArray[i], newArray[i], childPath, diffs);
             }
         }
     }
 
-    private static void CompareJsonValues(JValue valA, JValue valB, string path, List<string> diffs)
+    private static void CompareJsonValues(JValue oldValue, JValue newValue, string path, List<string> diffs)
     {
-        if (!object.Equals(valA, valB))
-            diffs.Add($"changed: {path}: (old=\"{valB}\", new=\"{valA}\")");
+        if (!object.Equals(oldValue, newValue))
+            diffs.Add($"changed: {path} (old=\"{oldValue}\", new=\"{newValue}\")");
     }
 
-    private static void CompareJsonObjects(JObject objA, JObject objB, string path, List<string> diffs)
+    private static void CompareJsonObjects(JObject oldObject, JObject newObject, string path, List<string> diffs)
     {
-        var allKeys = new HashSet<string>(objA.Properties().Select(p => p.Name));
-        allKeys.UnionWith(objB.Properties().Select(p => p.Name));
-        foreach (var key in allKeys)
+        var oldKeys = new HashSet<string>(oldObject.Properties().Select(p => p.Name));
+        var newKeys = new HashSet<string>(newObject.Properties().Select(p => p.Name));
+
+        var addedKeys = newKeys.Except(oldKeys);
+        var removedKeys = oldKeys.Except(newKeys);
+        var changedKeys = oldKeys.Intersect(newKeys);
+
+        foreach (var key in addedKeys)
         {
             var childPath = string.IsNullOrEmpty(path) ? key : $"{path}.{key}";
-            if (!objA.TryGetValue(key, out var va))
-                diffs.Add($"added: {childPath}");
-            else if (!objB.TryGetValue(key, out var vb))
-                diffs.Add($"removed: {childPath}");
-            else
-                CompareJsonTokens(va, vb, childPath, diffs);
+            diffs.Add($"added: {childPath}");
+        }
+
+        foreach (var key in removedKeys)
+        {
+            var childPath = string.IsNullOrEmpty(path) ? key : $"{path}.{key}";
+            diffs.Add($"removed: {childPath}");
+        }
+
+        foreach (var key in changedKeys)
+        {
+            var childPath = string.IsNullOrEmpty(path) ? key : $"{path}.{key}";
+            CompareJsonTokens(oldObject[key], newObject[key], childPath, diffs);
         }
     }
 }
